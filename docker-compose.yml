@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: risk-postgres
+    environment:
+      POSTGRES_DB: riskplatform
+      POSTGRES_USER: risk_user
+      POSTGRES_PASSWORD: risk_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

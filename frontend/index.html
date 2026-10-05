@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Portfolio Risk & Stress Testing Platform</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Portfolio Risk &amp; Stress Testing Platform</h1>
+  <div class="portfolio-picker">
+    <label for="portfolioId">Portfolio ID</label>
+    <input type="number" id="portfolioId" value="3" min="1">
+    <button id="loadPortfolioBtn">Load</button>
+  </div>
+</header>
+
+<main>
+
+  <section id="portfolioSummary" class="card">
+    <h2>Portfolio Summary</h2>
+    <div id="summaryContent" class="placeholder">Load a portfolio to see details.</div>
+  </section>
+
+  <section id="positionsSection" class="card">
+    <h2>Positions</h2>
+    <div id="positionsContent" class="placeholder">—</div>
+  </section>
+
+  <section class="card">
+    <h2>VaR &amp; Expected Shortfall</h2>
+    <div class="controls">
+      <label>Confidence
+        <select id="confidenceLevel">
+          <option value="0.90">90%</option>
+          <option value="0.95" selected>95%</option>
+          <option value="0.99">99%</option>
+        </select>
+      </label>
+      <label>Horizon (days)
+        <input type="number" id="horizonDays" value="1" min="1" style="width:60px">
+      </label>
+      <button id="runHistoricalBtn">Run Historical VaR</button>
+      <button id="runParametricBtn">Run Parametric VaR</button>
+      <button id="runMonteCarloBtn">Run Monte Carlo VaR</button>
+    </div>
+    <div id="varResults" class="placeholder">No calculations run yet.</div>
+  </section>
+
+  <section class="card">
+    <h2>Risk Contribution</h2>
+    <div class="controls">
+      <button id="runContributionBtn">Calculate Risk Contribution</button>
+    </div>
+    <div id="contributionResults" class="placeholder">—</div>
+  </section>
+
+  <section class="card">
+    <h2>Stress Testing</h2>
+    <div class="controls stress-controls">
+      <label>Scenario name
+        <input type="text" id="scenarioName" value="2008-style crash">
+      </label>
+      <label>Equity shock %
+        <input type="number" id="equityShockPct" value="-20" step="1">
+      </label>
+      <label>Rate shock (bps)
+        <input type="number" id="rateShockBps" value="100" step="10">
+      </label>
+      <label>FX shock %
+        <input type="number" id="fxShockPct" value="5" step="1">
+      </label>
+      <button id="runStressBtn">Run Stress Test</button>
+    </div>
+    <div id="stressResults" class="placeholder">—</div>
+  </section>
+
+  <section class="card">
+    <h2>Risk Limits</h2>
+    <div class="controls">
+      <button id="evaluateLimitsBtn">Evaluate Limits</button>
+    </div>
+    <div id="limitsResults" class="placeholder">—</div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
