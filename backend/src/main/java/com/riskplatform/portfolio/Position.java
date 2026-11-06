@@ -46,8 +46,22 @@ public class Position {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    /** Value in the currency the price is quoted in (see priceCurrency()). */
     public BigDecimal marketValue() {
         return quantity.multiply(price);
+    }
+
+    /**
+     * Currency the price is quoted in. An FX pair "XXXYYY" is quoted as
+     * YYY per 1 XXX, so USDINR at 73.38 is priced in INR whatever the
+     * stored currency column says.
+     */
+    public String priceCurrency() {
+        if (instrumentType == InstrumentType.FX && instrumentId != null
+                && instrumentId.matches("[A-Z]{6}")) {
+            return instrumentId.substring(3);
+        }
+        return currency;
     }
 
     public enum InstrumentType {

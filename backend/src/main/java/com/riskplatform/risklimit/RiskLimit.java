@@ -32,6 +32,16 @@ public class RiskLimit {
     @Column(name = "warning_threshold_pct", nullable = false, precision = 5, scale = 2)
     private BigDecimal warningThresholdPct = BigDecimal.valueOf(80.00);
 
+    // Optional scope for VAR / EXPECTED_SHORTFALL limits; null means "any".
+    @Column(length = 50)
+    private String methodology;
+
+    @Column(name = "confidence_level", precision = 5, scale = 4)
+    private BigDecimal confidenceLevel;
+
+    @Column(name = "horizon_days")
+    private Integer horizonDays;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 

@@ -6,6 +6,10 @@ spring:
     username: risk_user
     password: risk_pass
   jpa:
+    # Off on purpose. Open Session In View keeps the Hibernate session (and
+    # its JDBC connection) for the whole HTTP request, which would hold a
+    # pooled connection while a risk calculation waits on the quant engine.
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     properties:

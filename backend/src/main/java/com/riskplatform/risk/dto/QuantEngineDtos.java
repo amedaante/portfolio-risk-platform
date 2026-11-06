@@ -85,14 +85,16 @@ public class QuantEngineDtos {
     public record StressPositionInput(
             String instrumentId,
             String instrumentType,
+            String priceCurrency,         // currency the instrument is quoted in
             BigDecimal quantity,
-            BigDecimal currentPrice,
+            BigDecimal currentPrice,      // already converted to the portfolio's base currency
             BigDecimal modifiedDuration,  // nullable: BOND only
             BigDecimal convexity          // nullable: BOND only
     ) {}
 
     public record StressScenarioRequest(
             String scenarioName,
+            String baseCurrency,          // fxShockPct = move of this currency against all others
             BigDecimal equityShockPct,
             BigDecimal rateShockBps,
             BigDecimal fxShockPct,
