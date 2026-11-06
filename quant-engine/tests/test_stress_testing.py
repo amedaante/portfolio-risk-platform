@@ -136,3 +136,48 @@ def test_unrecognized_instrument_type_passes_through_unshocked():
 
     impact = result.position_impacts[0]
     assert impact.pnl == pytest.approx(0.0)
+
+# ---- FX shock with a base currency ------------------------------------------
+# fx_shock_pct = +5% means "USD +5% against every other currency" for a USD
+# book. Previously every FX position simply gained 5%.
+
+def _usd_book(*positions, fx_shock_pct=0.05, equity_shock_pct=0.0):
+    return compute_stress_scenario(StressScenarioRequest(
+        scenario_name="USD +5%", base_currency="USD",
+        fx_shock_pct=fx_shock_pct, equity_shock_pct=equity_shock_pct,
+        positions=list(positions),
+    ))
+
+
+def test_usd_strength_helps_long_usdinr():
+    # 50,000 USD notional (current price already converted to USD)
+    result = _usd_book(StressPositionInput(instrument_id="USDINR", instrument_type="FX",
+                                           price_currency="INR", quantity=50000, current_price=1.0))
+    assert result.total_pnl == pytest.approx(50000 * 0.05)
+
+
+def test_usd_strength_hurts_long_eurusd():
+    result = _usd_book(StressPositionInput(instrument_id="EURUSD", instrument_type="FX",
+                                           price_currency="USD", quantity=1000, current_price=1.10))
+    assert result.total_pnl == pytest.approx(1100 * (1 / 1.05 - 1))
+    assert result.total_pnl < 0
+
+
+def test_cross_pair_is_unaffected_by_a_uniform_usd_move():
+    result = _usd_book(StressPositionInput(instrument_id="EURGBP", instrument_type="FX",
+                                           price_currency="GBP", quantity=1000, current_price=1.2))
+    assert result.total_pnl == pytest.approx(0.0)
+
+
+def test_foreign_equity_takes_price_and_translation_shocks():
+    # A EUR-priced equity worth 10,000 USD, equities -10%, USD +5%
+    result = _usd_book(StressPositionInput(instrument_id="SAP", instrument_type="EQUITY",
+                                           price_currency="EUR", quantity=100, current_price=100.0),
+                       equity_shock_pct=-0.10)
+    assert result.stressed_portfolio_value == pytest.approx(10000 * 0.90 / 1.05)
+
+
+def test_base_currency_equity_ignores_fx_shock():
+    result = _usd_book(StressPositionInput(instrument_id="AAPL", instrument_type="EQUITY",
+                                           price_currency="USD", quantity=10, current_price=200.0))
+    assert result.total_pnl == pytest.approx(0.0)

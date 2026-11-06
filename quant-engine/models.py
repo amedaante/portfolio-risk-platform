@@ -1,5 +1,6 @@
 from datetime import date
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -11,7 +12,7 @@ class CamelModel(BaseModel):
 
 class PricePoint(CamelModel):
     date: date
-    price: float
+    price: float = Field(gt=0)
 
 
 class PositionInput(CamelModel):
@@ -21,10 +22,17 @@ class PositionInput(CamelModel):
     price_history: list[PricePoint]
 
 
+# Bounds reject inputs that previously produced inf/NaN (confidence_level=1
+# gives an infinite z-score and a zero ES denominator) or unbounded work
+# (num_simulations), which surfaced as HTTP 500s instead of 422s.
+ConfidenceLevel = Annotated[float, Field(gt=0.5, lt=1.0)]
+HorizonDays = Annotated[int, Field(ge=1, le=250)]
+
+
 class HistoricalVarRequest(CamelModel):
-    confidence_level: float = 0.95
-    horizon_days: int = 1
-    positions: list[PositionInput]
+    confidence_level: ConfidenceLevel = 0.95
+    horizon_days: HorizonDays = 1
+    positions: list[PositionInput] = Field(min_length=1)
 
 
 class HistoricalVarResponse(CamelModel):
@@ -50,11 +58,11 @@ class ParametricVarResponse(CamelModel):
     z_score: float
 
 class MonteCarloVarRequest(CamelModel):
-    confidence_level: float = 0.95
-    horizon_days: int = 1
-    num_simulations: int = 10000
+    confidence_level: ConfidenceLevel = 0.95
+    horizon_days: HorizonDays = 1
+    num_simulations: int = Field(default=10000, ge=1000, le=1_000_000)
     random_seed: int = 42
-    positions: list[PositionInput]
+    positions: list[PositionInput] = Field(min_length=1)
 
 
 class MonteCarloVarResponse(CamelModel):
@@ -124,6 +132,7 @@ class RateShockResponse(CamelModel):
 class StressPositionInput(CamelModel):
     instrument_id: str
     instrument_type: str          # EQUITY, ETF, BOND, FX
+    price_currency: str | None = None  # currency the instrument is quoted in
     quantity: float
     current_price: float
     modified_duration: float | None = None  # BOND only; falls back to scenario default
@@ -132,9 +141,13 @@ class StressPositionInput(CamelModel):
 
 class StressScenarioRequest(CamelModel):
     scenario_name: str
-    equity_shock_pct: float = 0.0   # e.g. -0.20 for a -20% equity shock
+    # When set, current_price values are in this currency and fx_shock_pct
+    # is this currency's move against all others. When None, the legacy
+    # behaviour applies (every FX position moves by fx_shock_pct).
+    base_currency: str | None = None
+    equity_shock_pct: float = Field(default=0.0, ge=-1.0)   # e.g. -0.20 for a -20% equity shock
     rate_shock_bps: float = 0.0     # e.g. 100 for a +100bps rate shock
-    fx_shock_pct: float = 0.0       # e.g. 0.05 for a +5% FX shock
+    fx_shock_pct: float = Field(default=0.0, gt=-1.0)       # e.g. 0.05: base currency +5%
     default_bond_duration: float = 5.0
     default_bond_convexity: float = 40.0
     positions: list[StressPositionInput]

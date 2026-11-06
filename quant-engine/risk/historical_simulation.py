@@ -14,41 +14,16 @@ stress events).
 """
 
 import numpy as np
-import pandas as pd
 
 from models import HistoricalVarRequest, HistoricalVarResponse
+from risk.returns import build_returns_matrix
 
 
 def compute_historical_var(request: HistoricalVarRequest) -> HistoricalVarResponse:
-    position_frames = []
-    current_values = {}
-
-    for position in request.positions:
-        df = pd.DataFrame(
-            [(p.date, p.price) for p in position.price_history],
-            columns=["date", "price"],
-        ).set_index("date").sort_index()
-
-        returns = df["price"].pct_change().dropna()
-        returns.name = position.instrument_id
-        position_frames.append(returns)
-
-        current_values[position.instrument_id] = position.quantity * position.current_price
-
-    # Align all instruments on common dates (inner join) — a date only
-    # counts as a scenario if every instrument has a return for it.
-    returns_df = pd.concat(position_frames, axis=1, join="inner")
-
-    if returns_df.empty or len(returns_df) < 2:
-        raise ValueError(
-            "Not enough overlapping price history across positions to compute historical VaR"
-        )
-
-    current_value_vector = pd.Series(current_values).reindex(returns_df.columns)
-    portfolio_value = float(current_value_vector.sum())
+    matrix = build_returns_matrix(request.positions, "historical VaR")
 
     # Simulated portfolio P&L for each historical day
-    pnl = returns_df.dot(current_value_vector)
+    pnl = matrix.returns.to_numpy() @ matrix.exposures
 
     confidence = request.confidence_level
     tail_quantile = 1 - confidence
@@ -61,19 +36,17 @@ def compute_historical_var(request: HistoricalVarRequest) -> HistoricalVarRespon
 
     # Square-root-of-time scaling to the requested horizon.
     # Simplifying assumption: assumes i.i.d. returns — flagged as a
-    # known limitation in risk-methodology.md, not presented as exact.
+    # known limitation in Risk-Methodology.md, not presented as exact.
     scale = np.sqrt(request.horizon_days)
-    var_scaled = var_1day * scale
-    es_scaled = es_1day * scale
 
     return HistoricalVarResponse(
         methodology="HISTORICAL_SIMULATION",
         confidence_level=confidence,
         horizon_days=request.horizon_days,
-        portfolio_value=portfolio_value,
-        var=var_scaled,
-        expected_shortfall=es_scaled,
-        observation_count=len(pnl),
+        portfolio_value=matrix.portfolio_value,
+        var=var_1day * scale,
+        expected_shortfall=es_1day * scale,
+        observation_count=matrix.observation_count,
         worst_loss=float(-pnl.min()),
         best_gain=float(pnl.max()),
     )

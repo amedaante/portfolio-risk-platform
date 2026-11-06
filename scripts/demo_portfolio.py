@@ -13,7 +13,7 @@ positions = [
     {"instrumentId": "TSLA",   "instrumentType": "EQUITY", "quantity": 150,   "price": 254.53, "currency": "USD", "valuationDate": "2026-09-25"},
     {"instrumentId": "SPY",    "instrumentType": "ETF",    "quantity": 1000,  "price": 535.10, "currency": "USD", "valuationDate": "2026-09-25"},
     {"instrumentId": "UST10Y", "instrumentType": "BOND",   "quantity": 2000,  "price": 101.08, "currency": "USD", "valuationDate": "2026-09-25"},
-    {"instrumentId": "USDINR", "instrumentType": "FX",     "quantity": 50000, "price": 73.38,  "currency": "USD", "valuationDate": "2026-09-25"},
+    {"instrumentId": "USDINR", "instrumentType": "FX",     "quantity": 50000, "price": 73.38,  "currency": "INR", "valuationDate": "2026-09-25"},
     {"instrumentId": "EURUSD", "instrumentType": "FX",     "quantity": 30000, "price": 0.8661, "currency": "USD", "valuationDate": "2026-09-25"},
 ]
 

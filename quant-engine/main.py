@@ -63,4 +63,7 @@ def rate_shock(request: RateShockRequest):
 
 @app.post("/risk/stress-test", response_model=StressScenarioResponse)
 def stress_test(request: StressScenarioRequest):
-    return compute_stress_scenario(request)
+    try:
+        return compute_stress_scenario(request)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))

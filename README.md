@@ -27,19 +27,23 @@ flowchart LR
 
 - The backend is the system-of-record and orchestration layer; the Python service is stateless calculation infrastructure.
 - Quantitative calculations are kept outside the Java domain services so the Python numerical stack can evolve independently of REST and persistence concerns.
-- Portfolio risk calculation input is read in a short read-only transaction. The HTTP call to the quant engine happens outside that transaction, and the result is persisted in a separate write transaction. This avoids holding database resources while waiting on network I/O.
+- Portfolio risk calculation input is read in a short read-only transaction. The HTTP call to the quant engine happens outside any transaction, and the result is persisted in a separate write transaction, so no pooled connection is held while waiting on network I/O. The transactional methods live on a separate bean (`RiskCalculationDataService`) so Spring's proxy applies, and `spring.jpa.open-in-view` is off. `RiskCalculationTransactionBoundaryTest` proves the boundaries.
 - The Java quant-engine client uses Spring `RestClient` with a shared JDK HTTP/1.1 client. Explicit timeouts and a single HTTP configuration are used for the downstream calls.
 - JSON uses camelCase at the service boundary. FastAPI's Pydantic models translate this to Python's snake_case fields.
 - Flyway migrations are the source of truth for database schema changes; `ddl-auto: validate` catches schema/entity mismatches at startup.
+- All values and risk numbers are in the portfolio's base currency. FX pairs are priced in their quote currency, and conversion rates come from FX pair prices in `market_price` (see Risk-Methodology.md, Currency Handling).
+- Expected failures map to clear statuses: 400 for invalid input, 404 for missing resources, 409 for conflicts, 422 when the data can't support a calculation, and 502 only when the quant engine is unreachable or fails.
+
+The bugs found and fixed in review, and how each was proven, are written up in [design-decisions.md](design-decisions.md).
 
 ## Features
 
-- Portfolio and position CRUD
+- Portfolio and position CRUD, valued in the portfolio's base currency
 - CSV market-price upload and historical price queries
 - Historical, parametric, and Monte Carlo VaR and expected shortfall
 - Per-instrument risk contribution
 - Scenario stress testing
-- Risk-limit creation, listing, deletion, and evaluation
+- Risk-limit creation, listing, deletion, and evaluation; VaR/ES limits can be scoped to a methodology, confidence level and horizon
 - Fixed-income bond price, Macaulay/modified duration, convexity, DV01, and rate-shock analysis
 
 ## Prerequisites
@@ -112,6 +116,8 @@ Base URL: `http://localhost:8080`
 | `GET` | `/api/portfolios/{id}` | Get a portfolio |
 | `POST` | `/api/portfolios/{id}/positions` | Add a position |
 | `GET` | `/api/portfolios/{id}/positions` | List positions |
+| `DELETE` | `/api/portfolios/{id}/positions/{positionId}` | Remove a position |
+| `DELETE` | `/api/portfolios/{id}` | Delete a portfolio (409 if it has saved risk calculations) |
 | `POST` | `/api/market-data/upload` | Upload market-price CSV (`multipart/form-data`, field `file`) |
 | `GET` | `/api/market-data/{instrumentId}/history` | Read price history; optional `from` and `to` date parameters |
 | `POST` | `/api/portfolios/{id}/risk-calculations/historical-var` | Historical VaR |
@@ -122,11 +128,14 @@ Base URL: `http://localhost:8080`
 | `GET` | `/api/risk-calculations/{id}` | Read a saved calculation |
 | `POST` | `/api/portfolios/{id}/risk-limits` | Create a risk limit |
 | `GET` | `/api/portfolios/{id}/risk-limits` | List risk limits |
+| `DELETE` | `/api/portfolios/{id}/risk-limits/{limitId}` | Delete a risk limit |
 | `GET` | `/api/portfolios/{id}/risk-limits/evaluate` | Evaluate current limits |
 | `POST` | `/api/fixed-income/analyze` | Bond analytics |
 | `POST` | `/api/fixed-income/rate-shock` | Fixed-income rate-shock analysis |
 
-VaR endpoints accept `confidenceLevel` (default `0.95`) and `horizonDays` (default `1`) as query parameters. Monte Carlo additionally accepts `numSimulations` (default `10000`) and `randomSeed` (default `42`). Stress testing accepts `scenarioName`, `equityShockPct`, `rateShockBps`, and `fxShockPct` as query parameters.
+VaR endpoints accept `confidenceLevel` (default `0.95`, must be between 0.5 and 1 exclusive) and `horizonDays` (default `1`, 1 to 250) as query parameters. Monte Carlo additionally accepts `numSimulations` (default `10000`, 1,000 to 1,000,000) and `randomSeed` (default `42`). Stress testing accepts `scenarioName`, `equityShockPct`, `rateShockBps`, and `fxShockPct` (the base currency's move against all others, e.g. `0.05` = USD +5%).
+
+Risk-limit creation accepts optional `methodology` (`HISTORICAL_SIMULATION`, `PARAMETRIC`, `MONTE_CARLO`), `confidenceLevel` and `horizonDays`. A VaR or ES limit is evaluated against the latest calculation matching that scope, and reports `NO_DATA` if there is none.
 
 Example PowerShell request:
 
@@ -158,6 +167,7 @@ C:\Python312\python.exe -m pytest -v
 - Python dependencies: `quant-engine/requirements.txt`
 - Database schema: `backend/src/main/resources/db/migration/`
 - The sample market data and sample position CSVs are under `backend/src/main/resources/data/`.
+- `scripts/demo_portfolio.py` and `scripts/demo_portfolio_2.py` create demo portfolios through the running API (`python scripts/demo_portfolio.py`). Upload `market_prices.csv` first.
 - Localhost URLs and credentials are development defaults, not production deployment settings.
 
 ## Known Limitations
@@ -165,8 +175,9 @@ C:\Python312\python.exe -m pytest -v
 This is a learning/demonstration project, not a production risk system. Specific simplifications, documented rather than hidden:
 
 - **Parametric and Monte Carlo VaR assume normally distributed returns.** Both will understate tail risk for fat-tailed, skewed real-world returns — Historical VaR is included specifically to show this gap, not as a redundant third method.
+- **FX positions are modelled as spot exposures** to their pair rate. A position priced in a currency with no FX pair in `market_price` can't be valued (422).
 - **Bond positions carry no coupon/maturity metadata.** Stress testing applies rate shocks via a configurable duration/convexity approximation rather than full per-bond repricing; the standalone `/api/fixed-income` endpoints do support exact bond-level analytics when given full bond parameters.
-- **Market data is a fixed, synthetically generated 252-day window**, not a live feed. All reproducibility claims (identical inputs → identical outputs, given a fixed random seed) are verified by the test suite — this is the property that matters for a demo dataset.
+- **Market data is a fixed, synthetically generated 252-day window**, not a live feed. Its returns are close to normal, so the three VaR methods agree closely on the demo book; it does not demonstrate fat tails. All reproducibility claims (identical inputs → identical outputs, given a fixed random seed) are verified by the test suite — this is the property that matters for a demo dataset.
 - **Audit trail covers single-result calculations** (VaR/ES) via the `risk_calculation` table; risk contribution and stress test results are not yet persisted with the same audit metadata.
 - **No authentication/authorization.** Out of scope for a local demo project.
 
@@ -174,5 +185,5 @@ This is a learning/demonstration project, not a production risk system. Specific
 
 Quant correctness and API wiring are tested separately, deliberately:
 
-- **Quant engine (pytest, 29 tests)**: VaR, Expected Shortfall, bond pricing, duration/convexity, and risk-contribution formulas are asserted against values computed *independently* of the implementation under test (by hand, or via a separate closed-form calculation in the test itself) — not by re-deriving the expected value from the same code being tested. Monte Carlo is tested for the properties that must hold under randomness (same-seed reproducibility, convergence toward the parametric closed-form at high simulation counts) rather than exact values.
-- **Backend (JUnit, 8+ tests)**: Pure business logic (risk-limit status classification) is tested without a Spring context for speed; `QuantEngineClient` is tested against `MockRestServiceServer` to verify both the exact outgoing request shape and correct error-wrapping on downstream failures — the same class of bug (a silently malformed request) that caused a real HTTP/1.1 compatibility issue during development (see `design-decisions.md`).
+- **Quant engine (pytest, 48 tests)**: VaR, Expected Shortfall, bond pricing, duration/convexity, and risk-contribution formulas are asserted against values computed *independently* of the implementation under test (by hand, or via a separate closed-form calculation in the test itself) — not by re-deriving the expected value from the same code being tested. Monte Carlo is tested for the properties that must hold under randomness (same-seed reproducibility, convergence toward the parametric closed-form at high simulation counts) rather than exact values.
+- **Backend (JUnit, 30 tests)**: Pure business logic (risk-limit status classification, FX conversion, CSV parsing) is tested without a Spring context for speed. `QuantEngineClient` is tested against `MockRestServiceServer` to verify the exact outgoing request shape and error-wrapping on downstream failures — the class of bug (a silently malformed request) behind a real HTTP/1.1 compatibility issue during development. `RiskCalculationTransactionBoundaryTest` runs real `@Transactional` proxies with a recording transaction manager to prove no transaction is open during the quant-engine call. `@WebMvcTest` tests cover parameter validation and error-status mapping. See [design-decisions.md](design-decisions.md).

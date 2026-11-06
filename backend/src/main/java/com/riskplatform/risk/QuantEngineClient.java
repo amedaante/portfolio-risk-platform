@@ -24,82 +24,42 @@ public class QuantEngineClient {
     }
 
     public HistoricalVarResponse calculateHistoricalVar(HistoricalVarRequest request) {
-        try {
-            return restClient.post()
-                    .uri("/risk/historical-var")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .body(HistoricalVarResponse.class);
-        } catch (RestClientResponseException e) {
-            throw new QuantEngineException(e.getStatusCode().value(), e);
-        } catch (RestClientException e) {
-            throw new QuantEngineException(null, e);
-        }
+        return post(restClient, "/risk/historical-var", request, HistoricalVarResponse.class);
     }
 
     public ParametricVarResponse calculateParametricVar(HistoricalVarRequest request) {
-        try {
-            return restClient.post()
-                    .uri("/risk/parametric-var")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .body(ParametricVarResponse.class);
-        } catch (RestClientResponseException e) {
-            throw new QuantEngineException(e.getStatusCode().value(), e);
-        } catch (RestClientException e) {
-            throw new QuantEngineException(null, e);
-        }
+        return post(restClient, "/risk/parametric-var", request, ParametricVarResponse.class);
     }
 
     public MonteCarloVarResponse calculateMonteCarloVar(MonteCarloVarRequest request) {
-        try {
-            return restClient.post()
-                    .uri("/risk/monte-carlo-var")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .body(MonteCarloVarResponse.class);
-        } catch (RestClientResponseException e) {
-            throw new QuantEngineException(e.getStatusCode().value(), e);
-        } catch (RestClientException e) {
-            throw new QuantEngineException(null, e);
-        }
+        return post(restClient, "/risk/monte-carlo-var", request, MonteCarloVarResponse.class);
     }
 
     public RiskContributionResponse calculateRiskContribution(HistoricalVarRequest request) {
-        try {
-            return restClient.post()
-                    .uri("/risk/risk-contribution")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .body(RiskContributionResponse.class);
-        } catch (RestClientResponseException e) {
-            throw new QuantEngineException(e.getStatusCode().value(), e);
-        } catch (RestClientException e) {
-            throw new QuantEngineException(null, e);
-        }
+        return post(restClient, "/risk/risk-contribution", request, RiskContributionResponse.class);
     }
 
     public StressScenarioResponse runStressTest(StressScenarioRequest request) {
+        return post(restClient, "/risk/stress-test", request, StressScenarioResponse.class);
+    }
+
+    /**
+     * One place for the request shape and error translation used by every
+     * quant-engine call (also used by FixedIncomeClient).
+     */
+    public static <T> T post(RestClient restClient, String uri, Object body, Class<T> responseType) {
         try {
             return restClient.post()
-                    .uri("/risk/stress-test")
+                    .uri(uri)
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
-                    .body(request)
+                    .body(body)
                     .retrieve()
-                    .body(StressScenarioResponse.class);
+                    .body(responseType);
         } catch (RestClientResponseException e) {
             throw new QuantEngineException(e.getStatusCode().value(), e);
         } catch (RestClientException e) {
             throw new QuantEngineException(null, e);
         }
     }
-}   
+}

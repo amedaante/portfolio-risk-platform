@@ -5,11 +5,13 @@ function currentPortfolioId() {
 }
 
 function fmtMoney(value) {
+  if (value === null || value === undefined) return "—";
   const n = Number(value);
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
 function fmtPct(value) {
+  if (value === null || value === undefined) return "—";
   return Number(value).toFixed(2) + "%";
 }
 
@@ -74,15 +76,15 @@ async function loadPortfolio() {
     }
     positionsEl.innerHTML = `
       <table>
-        <thead><tr><th>Instrument</th><th>Type</th><th>Quantity</th><th>Price</th><th>Market Value</th></tr></thead>
+        <thead><tr><th>Instrument</th><th>Type</th><th>Quantity</th><th>Price</th><th>Market Value (base)</th></tr></thead>
         <tbody>
           ${positions.map(p => `
             <tr>
               <td>${p.instrumentId}</td>
               <td>${p.instrumentType}</td>
               <td>${Number(p.quantity).toLocaleString()}</td>
-              <td>${Number(p.price).toFixed(2)}</td>
-              <td>${fmtMoney(p.marketValue)}</td>
+              <td>${Number(p.price).toFixed(2)} ${p.currency}</td>
+              <td>${fmtMoney(p.marketValueBase)}</td>
             </tr>
           `).join("")}
         </tbody>

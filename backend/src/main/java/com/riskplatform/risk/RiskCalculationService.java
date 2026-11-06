@@ -1,203 +1,129 @@
 package com.riskplatform.risk;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.riskplatform.marketdata.MarketPrice;
-import com.riskplatform.marketdata.MarketPriceRepository;
-import com.riskplatform.portfolio.Position;
-import com.riskplatform.portfolio.PositionRepository;
+import com.riskplatform.risk.RiskCalculationDataService.RiskCalculationInput;
 import com.riskplatform.risk.dto.QuantEngineDtos.*;
 import com.riskplatform.risk.dto.RiskCalculationDtos.HistoricalVarCalculationResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
 
+/**
+ * Orchestrates a risk calculation in three steps:
+ *   1. load inputs       (short read-only transaction, in RiskCalculationDataService)
+ *   2. call quant engine (no transaction, no DB connection held)
+ *   3. save the result   (short write transaction, in RiskCalculationDataService)
+ *
+ * Deliberately no @Transactional here. Steps 1 and 3 live on a separate
+ * bean so their transactions go through Spring's proxy. Together with
+ * spring.jpa.open-in-view=false, no connection is held during step 2.
+ */
 @Service
 public class RiskCalculationService {
 
-    private final PositionRepository positionRepository;
-    private final MarketPriceRepository marketPriceRepository;
+    private static final Logger logger = LoggerFactory.getLogger(RiskCalculationService.class);
+
+    private final RiskCalculationDataService dataService;
     private final QuantEngineClient quantEngineClient;
-    private final RiskCalculationRepository riskCalculationRepository;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
-    public RiskCalculationService(PositionRepository positionRepository,
-                                   MarketPriceRepository marketPriceRepository,
-                                   QuantEngineClient quantEngineClient,
-                                   RiskCalculationRepository riskCalculationRepository) {
-        this.positionRepository = positionRepository;
-        this.marketPriceRepository = marketPriceRepository;
+    // Spring Boot's ObjectMapper, which has JavaTimeModule registered. A
+    // hand-built `new ObjectMapper()` can't serialise LocalDate, which made
+    // every request_params audit value silently NULL.
+    public RiskCalculationService(RiskCalculationDataService dataService,
+                                  QuantEngineClient quantEngineClient,
+                                  ObjectMapper objectMapper) {
+        this.dataService = dataService;
         this.quantEngineClient = quantEngineClient;
-        this.riskCalculationRepository = riskCalculationRepository;
+        this.objectMapper = objectMapper;
     }
-
-    // ---- Public entry points: no @Transactional here on purpose. ----
-    // Each delegates to a short read transaction, then an untransacted
-    // network call, then a short write transaction. No DB connection
-    // is held open while we're waiting on the quant engine.
 
     public HistoricalVarCalculationResponse calculateHistoricalVar(
             Long portfolioId, BigDecimal confidenceLevel, Integer horizonDays) {
 
-        QuantInputs inputs = gatherQuantInputs(portfolioId, confidenceLevel, horizonDays);
-        HistoricalVarResponse result = quantEngineClient.calculateHistoricalVar(inputs.request());
+        RiskCalculationInput input = dataService.loadInput(portfolioId);
+        HistoricalVarRequest request = new HistoricalVarRequest(confidenceLevel, horizonDays, input.quantPositions());
+        HistoricalVarResponse result = quantEngineClient.calculateHistoricalVar(request);
 
-        return persistCalculation(
-                portfolioId, result.methodology(), confidenceLevel, horizonDays,
-                inputs.marketDataAsOf(), result.portfolioValue(), result.var(),
-                result.expectedShortfall(), result.observationCount(), inputs.request());
+        return save(portfolioId, input, result.methodology(), confidenceLevel, horizonDays,
+                result.portfolioValue(), result.var(), result.expectedShortfall(),
+                result.observationCount(), request);
     }
 
     public HistoricalVarCalculationResponse calculateParametricVar(
             Long portfolioId, BigDecimal confidenceLevel, Integer horizonDays) {
 
-        QuantInputs inputs = gatherQuantInputs(portfolioId, confidenceLevel, horizonDays);
-        ParametricVarResponse result = quantEngineClient.calculateParametricVar(inputs.request());
+        RiskCalculationInput input = dataService.loadInput(portfolioId);
+        HistoricalVarRequest request = new HistoricalVarRequest(confidenceLevel, horizonDays, input.quantPositions());
+        ParametricVarResponse result = quantEngineClient.calculateParametricVar(request);
 
-        return persistCalculation(
-                portfolioId, result.methodology(), confidenceLevel, horizonDays,
-                inputs.marketDataAsOf(), result.portfolioValue(), result.var(),
-                result.expectedShortfall(), result.observationCount(), inputs.request());
+        return save(portfolioId, input, result.methodology(), confidenceLevel, horizonDays,
+                result.portfolioValue(), result.var(), result.expectedShortfall(),
+                result.observationCount(), request);
     }
 
     public HistoricalVarCalculationResponse calculateMonteCarloVar(
             Long portfolioId, BigDecimal confidenceLevel, Integer horizonDays,
             Integer numSimulations, Long randomSeed) {
 
-        QuantInputs inputs = gatherQuantInputs(portfolioId, confidenceLevel, horizonDays);
+        RiskCalculationInput input = dataService.loadInput(portfolioId);
+        MonteCarloVarRequest request = new MonteCarloVarRequest(
+                confidenceLevel, horizonDays, numSimulations, randomSeed, input.quantPositions());
+        MonteCarloVarResponse result = quantEngineClient.calculateMonteCarloVar(request);
 
-        MonteCarloVarRequest mcRequest = new MonteCarloVarRequest(
-                confidenceLevel, horizonDays, numSimulations, randomSeed,
-                inputs.request().positions());
-
-        MonteCarloVarResponse result = quantEngineClient.calculateMonteCarloVar(mcRequest);
-
-        return persistCalculation(
-                portfolioId, result.methodology(), confidenceLevel, horizonDays,
-                inputs.marketDataAsOf(), result.portfolioValue(), result.var(),
-                result.expectedShortfall(), result.observationCount(), mcRequest);
+        return save(portfolioId, input, result.methodology(), confidenceLevel, horizonDays,
+                result.portfolioValue(), result.var(), result.expectedShortfall(),
+                result.observationCount(), request);
     }
 
     public RiskContributionResponse calculateRiskContribution(
             Long portfolioId, BigDecimal confidenceLevel, Integer horizonDays) {
 
-        QuantInputs inputs = gatherQuantInputs(portfolioId, confidenceLevel, horizonDays);
-        return quantEngineClient.calculateRiskContribution(inputs.request());
+        RiskCalculationInput input = dataService.loadInput(portfolioId);
+        return quantEngineClient.calculateRiskContribution(
+                new HistoricalVarRequest(confidenceLevel, horizonDays, input.quantPositions()));
     }
 
     public StressScenarioResponse runStressTest(
             Long portfolioId, String scenarioName,
             BigDecimal equityShockPct, BigDecimal rateShockBps, BigDecimal fxShockPct) {
 
-        List<Position> positions = positionRepository.findByPortfolioId(portfolioId);
-        if (positions.isEmpty()) {
-            throw new IllegalStateException("Portfolio has no positions: " + portfolioId);
-        }
-
-        List<StressPositionInput> stressInputs = new ArrayList<>();
-        for (Position position : positions) {
-            List<MarketPrice> history = marketPriceRepository
-                    .findByInstrumentIdOrderByPriceDateAsc(position.getInstrumentId());
-            if (history.isEmpty()) {
-                throw new IllegalStateException(
-                        "No market data for instrument: " + position.getInstrumentId());
-            }
-            BigDecimal latestPrice = history.get(history.size() - 1).getPrice();
-
-            stressInputs.add(new StressPositionInput(
-                    position.getInstrumentId(),
-                    position.getInstrumentType().name(),
-                    position.getQuantity(),
-                    latestPrice,
-                    null, // no stored bond duration/convexity per position yet; uses scenario defaults
-                    null
-            ));
-        }
-
+        RiskCalculationInput input = dataService.loadInput(portfolioId);
         StressScenarioRequest request = new StressScenarioRequest(
-                scenarioName, equityShockPct, rateShockBps, fxShockPct,
+                scenarioName, input.baseCurrency(), equityShockPct, rateShockBps, fxShockPct,
                 BigDecimal.valueOf(5.0), BigDecimal.valueOf(40.0), // default bond duration/convexity
-                stressInputs
-        );
+                input.stressPositions());
 
         return quantEngineClient.runStressTest(request);
     }
 
-    @Transactional(readOnly = true)
     public HistoricalVarCalculationResponse getCalculation(Long id) {
-        RiskCalculation calculation = riskCalculationRepository.findById(id)
-                .orElseThrow(() -> new IllegalStateException("Risk calculation not found: " + id));
-        return toResponse(calculation);
+        return toResponse(dataService.findCalculation(id));
     }
 
-    // ---- Step 1: gather inputs (short read-only transaction) ----
-
-    @Transactional(readOnly = true)
-    protected QuantInputs gatherQuantInputs(Long portfolioId, BigDecimal confidenceLevel, Integer horizonDays) {
-        List<Position> positions = positionRepository.findByPortfolioId(portfolioId);
-        if (positions.isEmpty()) {
-            throw new IllegalStateException("Portfolio has no positions: " + portfolioId);
-        }
-
-        LocalDate marketDataAsOf = LocalDate.MIN;
-        List<PositionInput> positionInputs = new ArrayList<>();
-
-        for (Position position : positions) {
-            List<MarketPrice> history = marketPriceRepository
-                    .findByInstrumentIdOrderByPriceDateAsc(position.getInstrumentId());
-
-            if (history.isEmpty()) {
-                throw new IllegalStateException(
-                        "No market data for instrument: " + position.getInstrumentId());
-            }
-
-            MarketPrice latest = history.get(history.size() - 1);
-            if (latest.getPriceDate().isAfter(marketDataAsOf)) {
-                marketDataAsOf = latest.getPriceDate();
-            }
-
-            List<PricePoint> priceHistory = history.stream()
-                    .map(mp -> new PricePoint(mp.getPriceDate(), mp.getPrice()))
-                    .toList();
-
-            positionInputs.add(new PositionInput(
-                    position.getInstrumentId(),
-                    position.getQuantity(),
-                    latest.getPrice(),
-                    priceHistory
-            ));
-        }
-
-        HistoricalVarRequest request = new HistoricalVarRequest(confidenceLevel, horizonDays, positionInputs);
-        return new QuantInputs(request, marketDataAsOf);
-    }
-
-    // ---- Step 3: persist result (short write transaction) ----
-
-    @Transactional
-    protected HistoricalVarCalculationResponse persistCalculation(
-        Long portfolioId, String methodology, BigDecimal confidenceLevel, Integer horizonDays,
-        LocalDate marketDataAsOf, BigDecimal portfolioValue, BigDecimal varAmount,
-        BigDecimal expectedShortfall, Integer observationCount, Object requestForAudit) {
+    private HistoricalVarCalculationResponse save(
+            Long portfolioId, RiskCalculationInput input, String methodology,
+            BigDecimal confidenceLevel, Integer horizonDays, BigDecimal portfolioValue,
+            BigDecimal varAmount, BigDecimal expectedShortfall, Integer observationCount,
+            Object requestForAudit) {
 
         RiskCalculation calculation = new RiskCalculation();
         calculation.setPortfolioId(portfolioId);
         calculation.setMethodology(methodology);
         calculation.setConfidenceLevel(confidenceLevel);
         calculation.setHorizonDays(horizonDays);
-        calculation.setMarketDataAsOf(marketDataAsOf);
+        calculation.setMarketDataAsOf(input.marketDataAsOf());
         calculation.setPortfolioValue(portfolioValue);
         calculation.setVarAmount(varAmount);
         calculation.setExpectedShortfall(expectedShortfall);
         calculation.setObservationCount(observationCount);
         calculation.setStatus("COMPLETED");
-        calculation.setRequestParams(toJsonSafely(requestForAudit));
+        calculation.setRequestParams(toAuditJson(requestForAudit));
 
-        calculation = riskCalculationRepository.save(calculation);
-        return toResponse(calculation);
+        return toResponse(dataService.saveCalculation(calculation));
     }
 
     private HistoricalVarCalculationResponse toResponse(RiskCalculation c) {
@@ -208,13 +134,13 @@ public class RiskCalculationService {
                 c.getExpectedShortfall(), c.getObservationCount(), c.getStatus());
     }
 
-    private String toJsonSafely(Object obj) {
+    private String toAuditJson(Object request) {
         try {
-            return objectMapper.writeValueAsString(obj);
-        } catch (Exception e) {
+            return objectMapper.writeValueAsString(request);
+        } catch (JsonProcessingException e) {
+            // Keep the result, but never lose the audit payload without a trace.
+            logger.error("Could not serialise risk calculation request for the audit trail", e);
             return null;
         }
     }
-
-    private record QuantInputs(HistoricalVarRequest request, LocalDate marketDataAsOf) {}
 }

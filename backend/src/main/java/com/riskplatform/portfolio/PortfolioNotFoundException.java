@@ -1,7 +1,10 @@
 package com.riskplatform.portfolio;
 
-public class PortfolioNotFoundException extends RuntimeException {
+import com.riskplatform.common.ApiException;
+import org.springframework.http.HttpStatus;
+
+public class PortfolioNotFoundException extends ApiException {
     public PortfolioNotFoundException(Long id) {
-        super("Portfolio not found: " + id);
+        super(HttpStatus.NOT_FOUND, "Portfolio not found: " + id);
     }
 }

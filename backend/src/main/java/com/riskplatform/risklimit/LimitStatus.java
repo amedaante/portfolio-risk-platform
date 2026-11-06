@@ -3,7 +3,9 @@ package com.riskplatform.risklimit;
 import java.math.BigDecimal;
 
 public enum LimitStatus {
-    WITHIN, WARNING, BREACHED;
+    WITHIN, WARNING, BREACHED,
+    // No calculation matches the limit's scope yet; never returned by classify().
+    NO_DATA;
 
     /**
      * Pure classification logic, deliberately kept free of any Spring

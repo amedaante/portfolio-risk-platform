@@ -7,58 +7,36 @@ C_i = e_i * (Sigma @ e)_i / sigma_p
 By Euler's homogeneity theorem (sigma_p is linear-homogeneous degree 1
 in the exposure vector e), sum(C_i) == sigma_p exactly. Scaling each
 C_i by the same (z * sqrt(horizon)) factor used for total VaR means
-sum(component_var) == total_var exactly -- this identity is asserted
-in the implementation itself as a correctness check, not just hoped for.
+sum(component_var) == total_var exactly; test_component_var_sums_to_total_var
+checks this identity.
 """
 
 import numpy as np
-import pandas as pd
 from scipy.stats import norm
 
 from models import HistoricalVarRequest, RiskContributionItem, RiskContributionResponse
+from risk.returns import build_returns_matrix, portfolio_stddev
 
 
 def compute_risk_contribution(request: HistoricalVarRequest) -> RiskContributionResponse:
-    position_frames = []
-    exposures = {}
+    matrix = build_returns_matrix(request.positions, "risk contribution")
+    instruments = matrix.instruments
+    exposure_vector = matrix.exposures
 
-    for position in request.positions:
-        df = pd.DataFrame(
-            [(p.date, p.price) for p in position.price_history],
-            columns=["date", "price"],
-        ).set_index("date").sort_index()
+    cov_matrix = matrix.returns.cov().to_numpy()
+    sigma_p = portfolio_stddev(cov_matrix, exposure_vector)
 
-        returns = df["price"].pct_change().dropna()
-        returns.name = position.instrument_id
-        position_frames.append(returns)
-
-        exposures[position.instrument_id] = position.quantity * position.current_price
-
-    returns_df = pd.concat(position_frames, axis=1, join="inner")
-    if returns_df.empty or len(returns_df) < 2:
-        raise ValueError(
-            "Not enough overlapping price history across positions to compute risk contribution"
-        )
-
-    instruments = list(returns_df.columns)
-    cov_matrix = returns_df.cov().to_numpy()
-    exposure_vector = pd.Series(exposures).reindex(instruments).to_numpy()
-    portfolio_value = float(exposure_vector.sum())
-
-    portfolio_variance = float(exposure_vector @ cov_matrix @ exposure_vector.T)
-    portfolio_stddev = float(np.sqrt(max(portfolio_variance, 0.0)))
-
-    if portfolio_stddev == 0.0:
+    if sigma_p == 0.0:
         raise ValueError("Portfolio volatility is zero; cannot decompose risk contribution")
 
     sigma_e = cov_matrix @ exposure_vector  # (Sigma @ e), vector over instruments
-    component_vol = exposure_vector * sigma_e / portfolio_stddev  # sums exactly to portfolio_stddev
+    component_vol = exposure_vector * sigma_e / sigma_p  # sums exactly to sigma_p
 
     confidence = request.confidence_level
     z = float(norm.ppf(confidence))
     scale = np.sqrt(request.horizon_days)
 
-    total_var = portfolio_stddev * z * scale
+    total_var = sigma_p * z * scale
     component_var = component_vol * z * scale
 
     contributions = [
@@ -78,7 +56,7 @@ def compute_risk_contribution(request: HistoricalVarRequest) -> RiskContribution
     return RiskContributionResponse(
         confidence_level=confidence,
         horizon_days=request.horizon_days,
-        portfolio_value=portfolio_value,
+        portfolio_value=matrix.portfolio_value,
         total_var=total_var,
         contributions=contributions,
     )

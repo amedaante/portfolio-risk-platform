@@ -33,7 +33,7 @@ public class RiskLimitController {
 
     @DeleteMapping("/{limitId}")
     public ResponseEntity<Void> deleteLimit(@PathVariable Long portfolioId, @PathVariable Long limitId) {
-        riskLimitService.deleteLimit(limitId);
+        riskLimitService.deleteLimit(portfolioId, limitId);
         return ResponseEntity.noContent().build();
     }
 

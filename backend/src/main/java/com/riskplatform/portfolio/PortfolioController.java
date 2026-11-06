@@ -46,9 +46,9 @@ public class PortfolioController {
         return portfolioService.listPositions(id);
     }
 
-    @DeleteMapping("/positions/{positionId}")
-    public ResponseEntity<Void> removePosition(@PathVariable Long positionId) {
-        portfolioService.removePosition(positionId);
+    @DeleteMapping("/{id}/positions/{positionId}")
+    public ResponseEntity<Void> removePosition(@PathVariable Long id, @PathVariable Long positionId) {
+        portfolioService.removePosition(id, positionId);
         return ResponseEntity.noContent().build();
     }
 
