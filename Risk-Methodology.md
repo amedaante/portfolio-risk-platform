@@ -22,13 +22,15 @@ VaR answers: "What is the maximum loss I expect, with X% confidence, over a give
 
 **Strength:** Fast (no simulation), fully analytical, and the building block for risk contribution (below).
 
-**Weakness:** Normality is a real assumption, not a technicality — equity and FX returns are empirically fat-tailed and often negatively skewed. Parametric VaR systematically understates true tail risk. This is visible directly in this project: Parametric VaR on the demo portfolio (TSLA-heavy, 55% annualized vol in the synthetic data) comes in meaningfully lower than Historical VaR on the same book — a concrete, demonstrable instance of the limitation, not just a textbook caveat.
+**Weakness:** Normality is a real assumption, not a technicality — real equity and FX returns are fat-tailed and often negatively skewed, so on real data Parametric VaR typically understates tail risk, most visibly at 99%.
+
+The bundled demo data does **not** show this, and it shouldn't be claimed to. The synthetic returns are close to normal (excess kurtosis between −0.2 and +0.5 for every instrument), so Historical and Parametric VaR nearly agree (see the measured table below). To demonstrate the gap, regenerate the data with fat-tailed innovations (for example Student-t with ν≈4) or load real prices.
 
 **Implementation:** `quant-engine/risk/parametric.py`.
 
 ### 3. Monte Carlo VaR
 
-**Method:** Estimates the same covariance matrix as Parametric VaR, then Cholesky-decomposes it (`Σ = LLᵀ`) to generate *correlated* random return scenarios: independent standard normal draws are multiplied by `L` to produce draws matching the real covariance structure, then the mean daily return is added back. Each of `N` simulated days produces a portfolio P&L outcome; VaR/ES come from the percentile of that large synthetic distribution — same quantile mechanics as Historical VaR, but on a sample size you control rather than one fixed by available history.
+**Method:** Estimates the same covariance matrix as Parametric VaR, then Cholesky-decomposes it (`Σ = LLᵀ`) to generate *correlated* random return scenarios: independent standard normal draws are multiplied by `L` to produce draws matching the real covariance structure. Returns are zero-mean, as in Parametric VaR: the sample mean of ~250 daily returns is statistically indistinguishable from zero, and an earlier version that added it (then scaled it by √h, though drift scales with h) put Monte Carlo VaR 53% below Parametric on a drifting test series. This is a one-step multivariate normal simulation, not geometric Brownian motion. If the covariance matrix is not positive definite (collinear instruments, more instruments than observations), the code falls back from Cholesky to an eigendecomposition with negative eigenvalues clipped to zero. Each of `N` simulated days produces a portfolio P&L outcome; VaR/ES come from the percentile of that large synthetic distribution — same quantile mechanics as Historical VaR, but on a sample size you control rather than one fixed by available history.
 
 **Why Cholesky matters:** Without it, simulating each instrument's returns independently would ignore correlation entirely — e.g., AAPL and SPY tend to move together, and a simulation that doesn't encode that would produce an unrealistically wide (or narrow, depending on the instrument mix) P&L distribution. Cholesky decomposition is the standard mechanism for injecting a target correlation structure into independent random draws.
 
@@ -36,7 +38,7 @@ VaR answers: "What is the maximum loss I expect, with X% confidence, over a give
 
 **Weakness:** As implemented, still draws from a multivariate *normal* distribution, so it inherits Parametric VaR's normality assumption — it improves on correlation handling and sample size, not on tail shape. A more advanced version would simulate from a fitted Student-t distribution or bootstrap from historical returns instead of drawing normals. This is a known, documented extension point, not an oversight.
 
-**Reproducibility:** Given a fixed `randomSeed`, results are bit-for-bit identical across runs — verified directly by `test_same_seed_produces_identical_results` in the test suite. This is a deliberate design choice for auditability: a stored risk calculation's `requestParams` (including the seed) is enough to reproduce the exact result later.
+**Reproducibility:** Given a fixed `randomSeed`, results are bit-for-bit identical across runs — verified directly by `test_same_seed_produces_identical_results` in the test suite. This is a deliberate design choice for auditability: a stored risk calculation's `requestParams` (the full engine request, including price history and seed) is enough to reproduce the exact result later. `RiskCalculationTransactionBoundaryTest.auditTrailStoresTheFullRequestIncludingDates` replays a stored payload. (An earlier version silently stored NULL here; see design-decisions.md.)
 
 **Implementation:** `quant-engine/risk/monte_carlo.py`.
 
@@ -51,9 +53,18 @@ VaR answers: "What is the maximum loss I expect, with X% confidence, over a give
 | Speed | Fast | Fastest | Slower (scales with simulation count) |
 | Reproducible given same inputs | Yes (deterministic) | Yes (deterministic) | Yes (given fixed seed) |
 
+Measured on the bundled demo book (`sample_positions.csv`, USD base, 1-day, 10,000 simulations, seed 42). Portfolio value $1,124,486.
+
+| Confidence | Historical VaR / ES | Parametric VaR / ES | Monte Carlo VaR / ES |
+|---|---|---|---|
+| 95% | 11,276 / 13,706 | 10,630 / 13,330 | 10,754 / 13,417 |
+| 99% | 15,195 / 16,885 | 15,034 / 17,224 | 15,010 / 17,302 |
+
+The three methods agree within about 6% because the synthetic returns are near-normal. Risk contribution: SPY 70.6%, MSFT 16.5%, TSLA 6.2%, everything else under 3%.
+
 ## Expected Shortfall (Conditional VaR)
 
-Expected Shortfall answers a different question than VaR: not "what's the loss at the Xth percentile," but "given that we're in the tail beyond VaR, what's the *average* loss?" ES is a coherent risk measure (it satisfies subadditivity — the ES of a combined portfolio is never worse than the sum of its parts' ES) in a way VaR is not; this is the standard theoretical reason modern regulatory frameworks (e.g., FRTB) have shifted toward ES. In this implementation, ES ≥ VaR is enforced as a structural property and tested directly (`test_expected_shortfall_never_less_than_var`).
+Expected Shortfall answers a different question than VaR: not "what's the loss at the Xth percentile," but "given that we're in the tail beyond VaR, what's the *average* loss?" ES is a coherent risk measure (it satisfies subadditivity — the ES of a combined portfolio is never worse than the sum of its parts' ES) in a way VaR is not; this is the standard theoretical reason modern regulatory frameworks (e.g., FRTB) have shifted toward ES. ES ≥ VaR holds by construction (ES averages losses at or beyond the VaR threshold); nothing in the code enforces it separately, and `test_expected_shortfall_never_less_than_var` checks it.
 
 ## Risk Contribution (Component VaR)
 
@@ -63,9 +74,21 @@ Expected Shortfall answers a different question than VaR: not "what's the loss a
 
 **Implementation:** `quant-engine/risk/risk_contribution.py`.
 
+## Currency Handling
+
+All risk numbers are in the portfolio's base currency.
+
+- An FX pair `XXXYYY` is quoted as YYY per 1 XXX, so it is priced in YYY regardless of the position's stored currency column. USDINR at 73.38 is priced in INR.
+- Exposure = quantity × latest price × FX rate (price currency → base). Rates come from pair prices already in `market_price`, direct (`INRUSD`) or inverted (`USDINR`).
+- Return series: an FX pair uses its own returns (the pair rate is the risk factor). Any other instrument priced in a foreign currency has its price history converted to base currency date by date, so its returns include the currency move.
+
+Before this was added, quantity × price was summed across currencies. The demo's 50,000 USDINR position counted as $3.67M instead of $50,000: 77% of portfolio value and 83% of VaR.
+
 ## Stress Testing
 
-**Method:** Applies configurable shocks by instrument type — direct percentage shocks for equity/ETF and FX positions, duration+convexity-based repricing for bonds — and reports base-vs-stressed portfolio value, both at the portfolio level and per-position. Position impacts are sorted largest-magnitude-first.
+**Method:** Applies configurable shocks by instrument type — percentage shocks for equity/ETF, duration+convexity-based repricing for bonds, and an FX shock — and reports base-vs-stressed portfolio value, both at the portfolio level and per-position. Position impacts are sorted largest-magnitude-first.
+
+**FX shock semantics:** `fxShockPct` is the move of the portfolio's base currency against all others ("USD +5%"). A pair with the base currency first (USDINR) rises by that amount; a pair with it second (EURUSD) falls to 1/(1+s); a cross pair is unchanged; any other foreign-priced position loses value on translation, ×1/(1+s). On the demo book, the "equities −20%, rates +100bp, USD +5%" scenario loses 15.8%. Before the currency fixes, the same scenario reported a 0.12% *gain*, because the mis-valued USDINR position (+$183k) offset the equity loss.
 
 **Distinction from VaR:** VaR answers "what's a plausible loss under normal market conditions." Stress testing answers a different question: "what happens under a *specific, named, potentially extreme* scenario I construct myself" (e.g., "equities down 20%, rates up 100bps, USD up 5%" — a stylized 2008-like scenario). It doesn't rely on a probability distribution at all; the scenario is a direct input, which is exactly why it's a necessary complement to VaR rather than a redundant check — VaR can systematically miss scenarios outside its historical/distributional assumptions, which stress testing is designed to probe directly.
 

@@ -51,13 +51,13 @@ st.subheader("Positions")
 positions_df = pd.DataFrame(positions)
 if not positions_df.empty:
     st.dataframe(
-        positions_df[["instrumentId", "instrumentType", "quantity", "price", "marketValue"]],
+        positions_df[["instrumentId", "instrumentType", "quantity", "price", "currency", "marketValueBase"]],
         use_container_width=True,
     )
 
     fig_alloc = go.Figure(data=[go.Pie(
         labels=positions_df["instrumentId"],
-        values=positions_df["marketValue"],
+        values=positions_df["marketValueBase"],  # base currency, so slices are comparable
         hole=0.4,
     )])
     fig_alloc.update_layout(title="Portfolio Allocation", height=350)
@@ -175,7 +175,7 @@ if st.button("Evaluate Limits"):
             limits_df = pd.DataFrame(limits["evaluations"])
 
             def status_color(status):
-                return {"WITHIN": "🟢", "WARNING": "🟡", "BREACHED": "🔴"}.get(status, "")
+                return {"WITHIN": "🟢", "WARNING": "🟡", "BREACHED": "🔴", "NO_DATA": "⚪"}.get(status, "")
 
             limits_df["status"] = limits_df["status"].apply(lambda s: f"{status_color(s)} {s}")
             st.dataframe(limits_df, use_container_width=True)

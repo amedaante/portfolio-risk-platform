@@ -20,8 +20,6 @@ dist/
 .idea/
 .vscode/
 
-# Unrelated C++ scratch file in the Java source tree
-/backend/src/main/java/com/riskplatform/common/jave.cpp
 
 # Logs
 *.log
